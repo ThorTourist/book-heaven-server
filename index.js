@@ -14,13 +14,15 @@ const port = process.env.PORT || 3000;
 
 // Middleware
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: "10mb" })); // IMPORTANT for base64 images!
+app.use(express.urlencoded({ limit: "10mb", extended: true }));
 
 // --- Firebase Admin Setup ---
 const serviceAccountPath = path.join(
   process.cwd(),
   "book-heaven-firebase-adminsdk.json"
 );
+
 const serviceAccount = JSON.parse(fs.readFileSync(serviceAccountPath, "utf8"));
 
 admin.initializeApp({
@@ -35,11 +37,17 @@ const verifyToken = async (req, res, next) => {
   }
 
   const idToken = authHeader.split(" ")[1];
+
   try {
     const decodedToken = await admin.auth().verifyIdToken(idToken);
+
+    // debug print
+    console.log("Decoded Token:", decodedToken);
+
     req.user = decodedToken;
     next();
   } catch (err) {
+    console.error("Token error:", err);
     return res.status(401).json({ message: "Unauthorized: Invalid token" });
   }
 };
@@ -51,7 +59,7 @@ let db;
 async function connectDB() {
   try {
     await client.connect();
-    db = client.db(); // default DB from URI
+    db = client.db("bookHeaven"); // explicit database
     console.log("Connected to MongoDB");
   } catch (err) {
     console.error("MongoDB connection error:", err);
@@ -60,7 +68,7 @@ async function connectDB() {
 
 await connectDB();
 
-// --- Routes ---
+// --- ROUTES ---
 
 // Test route
 app.get("/", (req, res) => {
@@ -70,14 +78,22 @@ app.get("/", (req, res) => {
 // Add new book (protected)
 app.post("/add-book", verifyToken, async (req, res) => {
   try {
+    // The frontend does NOT send userEmail → we fetch from decoded token
     const book = {
       ...req.body,
       userEmail: req.user.email,
       userName: req.user.name || req.user.email,
+      createdAt: new Date(),
     };
+
     const result = await db.collection("books").insertOne(book);
-    res.json({ message: "Book added successfully", bookId: result.insertedId });
+
+    res.json({
+      message: "Book added successfully",
+      bookId: result.insertedId,
+    });
   } catch (err) {
+    console.error("Insert error:", err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -92,68 +108,80 @@ app.get("/all-books", async (req, res) => {
   }
 });
 
-// Get book details by id (protected)
+// Get book details by Id (protected)
 app.get("/book-details/:id", verifyToken, async (req, res) => {
   try {
     const book = await db
       .collection("books")
       .findOne({ _id: new ObjectId(req.params.id) });
+
     if (!book) return res.status(404).json({ message: "Book not found" });
+
     res.json(book);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// Get books added by logged-in user (protected)
+// Get books added by logged-in user
 app.get("/myBooks", verifyToken, async (req, res) => {
   try {
     const books = await db
       .collection("books")
       .find({ userEmail: req.user.email })
       .toArray();
+
     res.json(books);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// Update a book by id (protected)
+// Update a book
 app.put("/update-book/:id", verifyToken, async (req, res) => {
   try {
-    const { id } = req.params;
-    const updatedData = req.body;
-    const filter = { _id: new ObjectId(id), userEmail: req.user.email }; // only user's own books
-    const result = await db
-      .collection("books")
-      .updateOne(filter, { $set: updatedData });
+    const filter = {
+      _id: new ObjectId(req.params.id),
+      userEmail: req.user.email, // only allow owner
+    };
+
+    const update = { $set: req.body };
+
+    const result = await db.collection("books").updateOne(filter, update);
+
     if (result.matchedCount === 0)
       return res
         .status(404)
         .json({ message: "Book not found or unauthorized" });
+
     res.json({ message: "Book updated successfully" });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// Delete a book by id (protected)
+// Delete a book
 app.delete("/delete-book/:id", verifyToken, async (req, res) => {
   try {
-    const { id } = req.params;
-    const filter = { _id: new ObjectId(id), userEmail: req.user.email }; // only user's own books
+    const filter = {
+      _id: new ObjectId(req.params.id),
+      userEmail: req.user.email, // only owner
+    };
+
     const result = await db.collection("books").deleteOne(filter);
+
     if (result.deletedCount === 0)
       return res
         .status(404)
         .json({ message: "Book not found or unauthorized" });
+
     res.json({ message: "Book deleted successfully" });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// --- Start Server ---
+// Start server
 app.listen(port, () => {
   console.log(`Server running at http://localhost:${port}`);
 });
