@@ -58,7 +58,7 @@ let db;
 
 async function connectDB() {
   try {
-    await client.connect();
+    // await client.connect();
     db = client.db("bookHeaven"); // explicit database
     console.log("Connected to MongoDB");
   } catch (err) {
@@ -185,3 +185,5 @@ app.delete("/delete-book/:id", verifyToken, async (req, res) => {
 app.listen(port, () => {
   console.log(`Server running at http://localhost:${port}`);
 });
+
+export default app
